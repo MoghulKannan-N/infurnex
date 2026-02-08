@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 import os
 import sys
+import io
 import asyncio
+import contextlib
 import subprocess
 import re
+import argparse
 from openai import AsyncOpenAI
 from cai.sdk.agents import Runner
-
-# ─────────────────────────────────────────────
-# QUIET LITELLM / CAI NOISE
 # ─────────────────────────────────────────────
 class _LiteLLMErrorFilter:
     def write(self, msg):
@@ -22,6 +22,11 @@ class _LiteLLMErrorFilter:
         sys.__stderr__.flush()
 
 sys.stderr = _LiteLLMErrorFilter()
+
+# ─────────────────────────────────────────────
+# GLOBALS
+# ─────────────────────────────────────────────
+DEBUG_MODE = False
 
 # ─────────────────────────────────────────────
 # ENVIRONMENT
@@ -45,7 +50,7 @@ sys.path.insert(0, BASE_DIR)
 # ─────────────────────────────────────────────
 from agents.decider import build_decider
 from agents.planner import build_planner
-from tools.web_search import web_search, fetch_url
+from agents.researcher import build_researcher
 from cai.sdk.agents import Agent
 from cai.sdk.agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
 
@@ -61,27 +66,22 @@ openai_client = AsyncOpenAI(
 # CHAT AGENT (NO SYSTEM ACCESS)
 # ─────────────────────────────────────────────
 CHAT_PROMPT = """
-You are Infurnex, a helpful Linux AI assistant with internet access.
+You are Infurnex, an AI assistant specializing in Linux, security, and hacking.
 
-Capabilities:
-- Answer questions about Linux, security, and hacking
-- Search the internet for CTF writeups, exploits, and documentation
-- Fetch and read content from URLs
+I can answer questions about:
+- Linux commands and system administration
+- Security concepts and vulnerabilities  
+- Hacking techniques and CTF challenges
+- Penetration testing and exploit development
+- General programming and cybersecurity topics
 
-Tools available:
-- web_search(query, num_results): Search DuckDuckGo for information
-- fetch_url(url, max_length): Fetch and read content from a URL
-
-When to use web search:
-- Finding CTF writeups or exploit techniques
-- Looking up CVE details
-- Searching for tool documentation
-- Researching vulnerabilities
+Note: I currently don't have web search enabled, but I have extensive knowledge 
+about security, Linux, and hacking from my training data.
 
 Rules:
 - Do NOT run system commands (use the system agent for that)
-- Do NOT guess - search for accurate information when needed
-- Provide sources when using web search results
+- Provide clear, accurate answers from your knowledge
+- If you don't know something, say so honestly
 """
 
 chat = Agent(
@@ -91,7 +91,7 @@ chat = Agent(
         model=os.environ["CAI_MODEL"],
         openai_client=openai_client,
     ),
-    tools=[web_search, fetch_url],
+    tools=[],  # No web search - it causes infinite loops
 )
 
 # ─────────────────────────────────────────────
@@ -99,6 +99,7 @@ chat = Agent(
 # ─────────────────────────────────────────────
 decider = build_decider(openai_client)
 planner = build_planner(openai_client)
+researcher = build_researcher(openai_client)
 runner = Runner()
 
 # ─────────────────────────────────────────────
@@ -109,12 +110,14 @@ CURRENT_CWD = os.getcwd()
 # ─────────────────────────────────────────────
 # SUPPRESS CAI VERBOSE OUTPUT
 # ─────────────────────────────────────────────
-import io
-import contextlib
 
 @contextlib.contextmanager
 def suppress_stdout():
-    """Temporarily suppress stdout to hide CAI debug boxes"""
+    """Temporarily suppress stdout to hide CAI debug boxes, unless in DEBUG_MODE"""
+    if DEBUG_MODE:
+        yield
+        return
+        
     old_stdout = sys.stdout
     sys.stdout = io.StringIO()
     try:
@@ -147,6 +150,9 @@ def sanitize_command(text: str) -> str:
             continue
         if line.upper() == "NOTHING":
             return ""
+        # Reject commands with placeholders
+        if '<' in line and '>' in line:
+            continue
         if CMD_RE.match(line):
             return line
 
@@ -192,6 +198,14 @@ def run_command(cmd: str):
 # MAIN LOOP
 # ─────────────────────────────────────────────
 async def main():
+    global DEBUG_MODE
+    
+    parser = argparse.ArgumentParser(description="Infurnex AI Agent")
+    parser.add_argument("-d", "--debug", action="store_true", help="Enable debug mode (show AI thinking)")
+    args = parser.parse_args()
+    
+    DEBUG_MODE = args.debug
+    
     print("Infurnex successfully booted...! >>\n")
 
     while True:
@@ -202,18 +216,44 @@ async def main():
 
             with suppress_stdout():
                 decision = await runner.run(decider, user_input)
+            
+            if DEBUG_MODE:
+                print(f"\n[DEBUG] Decider Output: {decision.final_output}")
+                
             verdict = decision.final_output.strip().split()[0].upper()
 
-            if verdict == "NO":
+            # 1. KNOWLEDGE PATH (Chat)
+            if "KNOWLEDGE" in verdict or "NO" in verdict:  # Backward compatibility
                 with suppress_stdout():
                     reply = await runner.run(chat, user_input)
                 print(f"\ninfurnex > {reply.final_output}\n")
                 continue
 
-            # SYSTEM PATH
+            # 2. SEARCH PATH (Researcher)
+            if "SEARCH" in verdict:
+                if not DEBUG_MODE:
+                    print("\n(searching internet...)\n")
+                with suppress_stdout():
+                    result = await runner.run(researcher, user_input)
+                print(f"\ninfurnex > {result.final_output}\n")
+                continue
+
+            # 3. SYSTEM PATH (Planner)
+            # Default to system path if COMMANDS or YES
             with suppress_stdout():
                 plan = await runner.run(planner, user_input)
+            
+            if DEBUG_MODE:
+                print(f"[DEBUG] Planner Output: {plan.final_output}")
+                
             command = sanitize_command(plan.final_output)
+            
+            # If Planner couldn't generate a valid command, fall back to Chat
+            if not command:
+                with suppress_stdout():
+                    reply = await runner.run(chat, user_input)
+                print(f"\ninfurnex > {reply.final_output}\n")
+                continue
 
             rc, output = run_command(command)
             print(f"infurnex> {output}\n")
@@ -238,7 +278,7 @@ Output ONLY the command.
 
                 if retry_cmd and retry_cmd != command:
                     rc, output = run_command(retry_cmd)
-                    print(f"AI> {output}\n")
+                    print(f"infurnex > {output}\n")
 
         except KeyboardInterrupt:
             break
