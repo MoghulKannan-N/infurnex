@@ -30,13 +30,18 @@ Examples:
 - "hi" → NO
 - "what is linux" → NO
 - "what does pwd do" → NO
+- "what is a buffer overflow" → NO
+- "explain SQL injection" → NO
+- "how does chmod work" → NO
+- "what is SSH" → NO
+- "define stack overflow" → NO
 - "what directory am I in" → YES
 - "where am I running from" → YES
 - "list files here" → YES
 - "who am I logged in as" → YES
 - "is docker running" → YES
 - "what is my kernel version" → YES
-- "how does chmod work" → NO
+- "show my processes" → YES
 
 Respond with exactly ONE word nothing else:
 YES or NO
