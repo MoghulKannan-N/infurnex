@@ -45,6 +45,7 @@ sys.path.insert(0, BASE_DIR)
 # ─────────────────────────────────────────────
 from agents.decider import build_decider
 from agents.planner import build_planner
+from tools.web_search import web_search, fetch_url
 from cai.sdk.agents import Agent
 from cai.sdk.agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
 
@@ -60,12 +61,27 @@ openai_client = AsyncOpenAI(
 # CHAT AGENT (NO SYSTEM ACCESS)
 # ─────────────────────────────────────────────
 CHAT_PROMPT = """
-You are a helpful Linux AI assistant.
+You are Infurnex, a helpful Linux AI assistant with internet access.
+
+Capabilities:
+- Answer questions about Linux, security, and hacking
+- Search the internet for CTF writeups, exploits, and documentation
+- Fetch and read content from URLs
+
+Tools available:
+- web_search(query, num_results): Search DuckDuckGo for information
+- fetch_url(url, max_length): Fetch and read content from a URL
+
+When to use web search:
+- Finding CTF writeups or exploit techniques
+- Looking up CVE details
+- Searching for tool documentation
+- Researching vulnerabilities
 
 Rules:
-- Do NOT run system commands
-- Do NOT guess system state
-- Answer conversationally
+- Do NOT run system commands (use the system agent for that)
+- Do NOT guess - search for accurate information when needed
+- Provide sources when using web search results
 """
 
 chat = Agent(
@@ -75,7 +91,7 @@ chat = Agent(
         model=os.environ["CAI_MODEL"],
         openai_client=openai_client,
     ),
-    tools=[],
+    tools=[web_search, fetch_url],
 )
 
 # ─────────────────────────────────────────────
