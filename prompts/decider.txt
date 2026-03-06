@@ -21,6 +21,9 @@ Examples:
 - "what is a buffer overflow" → KNOWLEDGE
 - "how do I write a python script" → KNOWLEDGE
 - "give me nmap examples" → KNOWLEDGE
+- "ok" → KNOWLEDGE
+- "thanks" → KNOWLEDGE
+- "cool" → KNOWLEDGE
 
 - "list my files" → COMMANDS
 - "check if docker is running" → COMMANDS
@@ -28,14 +31,33 @@ Examples:
 
 - "find picoCTF registry writeup" → SEARCH
 - "what are recent Apache vulnerabilities" → SEARCH
-- "search for nmap cheat sheet" → SEARCH
-- "lookup CVE-2024-1234" → SEARCH
+- "search for- "latest cve for nginx" → SEARCH
+- "current president of india" → SEARCH
+- "what is todays date" → SEARCH
+- "what time is it" → SEARCH
+- "current weather in paris" → SEARCH
+
+COMMANDS: The user wants to EXECUTE a specific command or script on the system.
+- "list files"
+- "ping google.com"
+- "nmap -sV 192.168.1.1"
+- "curl example.com"
+- "run the python script"
+- "check uptime"
+- "whoami"
+
+RESPOND ONLY WITH THE CATEGORY NAME.
+DO NOT ANSWER THE QUESTION. DO NOT PROVIDE EXPLANATIONS.
 
 Rules:
 - Focus on INTENT
 - If it needs external current info → SEARCH
 - If it needs local system access → COMMANDS
 - Otherwise → KNOWLEDGE
+
+CRITICAL: Output MUST be exactly one word.
+Example Output: SEARCH
+Bad Output: I will search for that...
 
 Respond with exactly ONE word:
 KNOWLEDGE or COMMANDS or SEARCH

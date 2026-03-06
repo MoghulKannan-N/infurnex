@@ -7,8 +7,13 @@ import contextlib
 import subprocess
 import re
 import argparse
+from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from cai.sdk.agents import Runner
+
+# Load environment variables from .env file
+load_dotenv()
+
 # ─────────────────────────────────────────────
 class _LiteLLMErrorFilter:
     def write(self, msg):
@@ -31,12 +36,16 @@ DEBUG_MODE = False
 # ─────────────────────────────────────────────
 # ENVIRONMENT
 # ─────────────────────────────────────────────
-os.environ["OPENAI_API_KEY"] = "local"
-os.environ["OPENAI_BASE_URL"] = "http://169.254.83.107:1234/v1"
-os.environ["CAI_MODEL"] = "openai/mistral-7b-instruct-v0.3"
-os.environ["CAI_STREAM"] = "false"
-os.environ["CAI_TELEMETRY"] = "false"
-os.environ["CAI_VERBOSE"] = "false"
+# Set defaults if not provided in .env
+os.environ.setdefault("CAI_MODEL", "gpt-4o-mini")
+os.environ.setdefault("CAI_STREAM", "false")
+os.environ.setdefault("CAI_TELEMETRY", "false")
+os.environ.setdefault("CAI_VERBOSE", "false")
+
+if not os.getenv("OPENAI_API_KEY"):
+    print("❌ Error: OPENAI_API_KEY not found in environment or .env file.")
+    print("Please create a .env file based on .env.example")
+    sys.exit(1)
 
 # ─────────────────────────────────────────────
 # BOOTSTRAP
@@ -48,19 +57,14 @@ sys.path.insert(0, BASE_DIR)
 # ─────────────────────────────────────────────
 # IMPORTS
 # ─────────────────────────────────────────────
-from agents.decider import build_decider
 from agents.planner import build_planner
 from agents.researcher import build_researcher
-from cai.sdk.agents import Agent
-from cai.sdk.agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
 
 # ─────────────────────────────────────────────
 # CLIENT
 # ─────────────────────────────────────────────
-openai_client = AsyncOpenAI(
-    api_key="local",
-    base_url=os.environ["OPENAI_BASE_URL"],
-)
+# Uses OPENAI_API_KEY and optionally OPENAI_BASE_URL from environment
+openai_client = AsyncOpenAI()
 
 # ─────────────────────────────────────────────
 # CHAT AGENT (NO SYSTEM ACCESS)
@@ -75,29 +79,17 @@ I can answer questions about:
 - Penetration testing and exploit development
 - General programming and cybersecurity topics
 
-Note: I currently don't have web search enabled, but I have extensive knowledge 
-about security, Linux, and hacking from my training data.
-
 Rules:
 - Do NOT run system commands (use the system agent for that)
 - Provide clear, accurate answers from your knowledge
 - If you don't know something, say so honestly
+- BE CONCISE to save token costs.
 """
 
-chat = Agent(
-    name="Chat",
-    instructions=CHAT_PROMPT,
-    model=OpenAIChatCompletionsModel(
-        model=os.environ["CAI_MODEL"],
-        openai_client=openai_client,
-    ),
-    tools=[],  # No web search - it causes infinite loops
-)
 
 # ─────────────────────────────────────────────
 # SYSTEM AGENTS
 # ─────────────────────────────────────────────
-decider = build_decider(openai_client)
 planner = build_planner(openai_client)
 researcher = build_researcher(openai_client)
 runner = Runner()
@@ -124,6 +116,53 @@ def suppress_stdout():
         yield
     finally:
         sys.stdout = old_stdout
+
+
+# ─────────────────────────────────────────────
+# LLM DECIDER (lightweight direct API call)
+# ─────────────────────────────────────────────
+def _load_decider_prompt():
+    with open("prompts/decider.txt") as f:
+        return f.read()
+
+DECIDER_PROMPT = _load_decider_prompt()
+
+async def decide(user_input: str) -> str:
+    """
+    Ask the LLM to classify the query as KNOWLEDGE, COMMANDS, or SEARCH.
+    Uses a direct API call with max_tokens=5 so it's cheap and fast.
+    """
+    try:
+        resp = await openai_client.chat.completions.create(
+            model=os.environ["CAI_MODEL"],
+            messages=[
+                {"role": "system", "content": DECIDER_PROMPT},
+                {"role": "user", "content": user_input},
+            ],
+            max_tokens=5,
+            temperature=0,
+        )
+        word = resp.choices[0].message.content.strip().split()[0].upper()
+        if word in ("KNOWLEDGE", "COMMANDS", "SEARCH"):
+            return word
+        return "KNOWLEDGE"  # safe fallback
+    except Exception:
+        return "KNOWLEDGE"
+
+async def chat_reply(user_input: str) -> str:
+    """Direct API call for conversational responses — no runner overhead."""
+    try:
+        resp = await openai_client.chat.completions.create(
+            model=os.environ["CAI_MODEL"],
+            messages=[
+                {"role": "system", "content": CHAT_PROMPT},
+                {"role": "user", "content": user_input},
+            ],
+            temperature=0.7,
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception as e:
+        return f"(chat error: {e})"
 
 
 # ─────────────────────────────────────────────
@@ -184,15 +223,28 @@ def run_command(cmd: str):
         if confirm != "y":
             return 1, "(sudo cancelled)"
 
-    # 🔥 DO NOT capture stdout/stderr → allow sudo password prompt
-    proc = subprocess.run(
+    # Capture output while streaming to console
+    process = subprocess.Popen(
         cmd,
         shell=True,
         executable="/bin/bash",
         cwd=CURRENT_CWD,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1
     )
 
-    return proc.returncode, "(command finished)"
+    output = []
+    while True:
+        line = process.stdout.readline()
+        if not line and process.poll() is not None:
+            break
+        if line:
+            print(line, end='', flush=True)  # Stream to user
+            output.append(line)
+
+    return process.poll(), "".join(output)
 
 # ─────────────────────────────────────────────
 # MAIN LOOP
@@ -206,7 +258,7 @@ async def main():
     
     DEBUG_MODE = args.debug
     
-    print("Infurnex successfully booted...! >>\n")
+    print("\nInfurnex successfully booted...! >>\n")
 
     while True:
         try:
@@ -214,22 +266,12 @@ async def main():
             if user_input.lower() in ("exit", "quit"):
                 break
 
-            with suppress_stdout():
-                decision = await runner.run(decider, user_input)
-            
+            verdict = await decide(user_input)
+
             if DEBUG_MODE:
-                print(f"\n[DEBUG] Decider Output: {decision.final_output}")
-                
-            verdict = decision.final_output.strip().split()[0].upper()
+                print(f"\n[DEBUG] Decider verdict: {verdict}")
 
-            # 1. KNOWLEDGE PATH (Chat)
-            if "KNOWLEDGE" in verdict or "NO" in verdict:  # Backward compatibility
-                with suppress_stdout():
-                    reply = await runner.run(chat, user_input)
-                print(f"\ninfurnex > {reply.final_output}\n")
-                continue
-
-            # 2. SEARCH PATH (Researcher)
+            # 1. SEARCH PATH (Researcher)
             if "SEARCH" in verdict:
                 if not DEBUG_MODE:
                     print("\n(searching internet...)\n")
@@ -238,54 +280,73 @@ async def main():
                 print(f"\ninfurnex > {result.final_output}\n")
                 continue
 
-            # 3. SYSTEM PATH (Planner)
-            # Default to system path if COMMANDS or YES
-            with suppress_stdout():
-                plan = await runner.run(planner, user_input)
-            
-            if DEBUG_MODE:
-                print(f"[DEBUG] Planner Output: {plan.final_output}")
-                
-            command = sanitize_command(plan.final_output)
-            
-            # If Planner couldn't generate a valid command, fall back to Chat
-            if not command:
+            # 2. SYSTEM PATH (Planner) - EXPLICIT ONLY
+            if "COMMANDS" in verdict or "YES" in verdict:
                 with suppress_stdout():
-                    reply = await runner.run(chat, user_input)
-                print(f"\ninfurnex > {reply.final_output}\n")
+                    plan = await runner.run(planner, user_input)
+                
+                if DEBUG_MODE:
+                    print(f"[DEBUG] Planner Output: {plan.final_output}")
+                    
+                command = sanitize_command(plan.final_output)
+                
+                # If Planner couldn't generate a valid command, fall back to Chat
+                if not command:
+                    reply = await chat_reply(user_input)
+                    print(f"\ninfurnex > {reply}\n")
+                    continue
+
+                rc, output = run_command(command)
+                print(f"infurnex> {output}\n")
+
+                # RETRY LOOP (Max 3 attempts)
+                attempts = 0
+                while rc != 0 and attempts < 3:
+                    attempts += 1
+                    print(f"\n[!] Command failed. Retrying... ({attempts}/3)\n")
+                    
+                    rethink_prompt = f"""
+                    The previous command failed.
+                    
+                    Command:
+                    {command}
+                    
+                    Error Output:
+                    {output}
+                    
+                    Analyze the error. If it's a syntax error, fix it.
+                    If you don't know the solution, use `web_search` to find the correct command.
+                    
+                    Output ONLY the corrected shell command.
+                    """
+                    
+                    with suppress_stdout():
+                        retry = await runner.run(planner, rethink_prompt)
+                    
+                    if DEBUG_MODE:
+                        print(f"[DEBUG] Planner Retry Plan: {retry.final_output}")
+
+                    retry_cmd = sanitize_command(retry.final_output)
+                    
+                    if retry_cmd:
+                        command = retry_cmd  # Update current command
+                        rc, output = run_command(command)
+                        print(f"infurnex > {output}\n")
+                    else:
+                        print("Planner could not generate a fix.")
+                        break
                 continue
 
-            rc, output = run_command(command)
-            print(f"infurnex> {output}\n")
-
-            # SINGLE RETHINK ON FAILURE
-            if rc != 0 and command:
-                rethink_prompt = f"""
-The command failed.
-
-Command:
-{command}
-
-Error:
-{output}
-
-Generate ONE alternative shell command to achieve the same goal.
-Output ONLY the command.
-"""
-                with suppress_stdout():
-                    retry = await runner.run(planner, rethink_prompt)
-                retry_cmd = sanitize_command(retry.final_output)
-
-                if retry_cmd and retry_cmd != command:
-                    rc, output = run_command(retry_cmd)
-                    print(f"infurnex > {output}\n")
+            # 3. KNOWLEDGE PATH (Chat) - DEFAULT FALLBACK
+            reply = await chat_reply(user_input)
+            print(f"\ninfurnex > {reply}\n")
 
         except KeyboardInterrupt:
             break
         except Exception as e:
             print(f"[ERROR] {e}")
 
-    print("Bye 👋")
+    print("\n👋")
 
 # ─────────────────────────────────────────────
 # CLEAN ASYNCIO SHUTDOWN

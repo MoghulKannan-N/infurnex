@@ -1,0 +1,90 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #0a0e18;
+  --color-surface: #111827;
+  --color-surface2: #1e293b;
+  --color-surface3: #334155;
+  --color-accent: #3b82f6;
+  --color-accent-h: #2563eb;
+  --color-muted: #64748b;
+  --color-green: #10b981;
+  --color-red: #ef4444;
+  --color-yellow: #f59e0b;
+  --color-border: rgba(255, 255, 255, 0.08);
+}
+
+@utility glass {
+  background-color: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+@utility glass-dark {
+  background-color: rgba(17, 24, 39, 0.85);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+@utility message-bubble {
+  position: relative;
+  max-width: 100%;
+  border-radius: 1.25rem;
+  padding: 1rem 1.5rem;
+  font-size: 0.9375rem;
+  line-height: 1.75;
+}
+
+@utility user-bubble {
+  @apply bg-accent text-white rounded-tr-none;
+}
+
+@utility ai-bubble {
+  @apply glass-dark rounded-tl-none border-l-2 border-accent/30;
+}
+
+@layer base {
+  body {
+    @apply bg-bg text-slate-100 font-sans antialiased;
+    background-image:
+      radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.05) 0, transparent 50%),
+      radial-gradient(at 50% 0%, rgba(16, 185, 129, 0.02) 0, transparent 50%);
+    background-attachment: fixed;
+  }
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  @apply bg-white/10 rounded-full hover:bg-white/20;
+}
+
+@keyframes float {
+
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+pre {
+  @apply relative rounded-xl border border-white/10 bg-black/40 p-4 font-mono text-sm leading-relaxed overflow-x-auto my-4;
+}
+
+code {
+  @apply font-mono text-blue-300;
+}

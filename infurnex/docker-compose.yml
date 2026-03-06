@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  infurnex-agent:
+    build: .
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    networks:
+      - sandbox_net
+    volumes:
+      - .:/app
+
+  target-app:
+    image: nginx:alpine  # Mock target for MVP testing
+    networks:
+      - sandbox_net
+    # Target will be resolvable as http://target-app inside the network
+
+networks:
+  sandbox_net:
+    internal: true # CRITICAL: Blocks all outbound internet egress

