@@ -155,6 +155,17 @@ async def run_shell(cmd: str) -> tuple:
             return 0, f"(cwd changed to {CURRENT_CWD})"
         return 1, f"cd: no such directory: {cmd[3:].strip()}"
 
+    # Calculate dynamic timeouts for heavy Kali tools
+    timeout_s = 20.0 # Default fallback
+    if cmd.startswith("sqlmap"):
+        timeout_s = 300.0
+    elif cmd.startswith("dirsearch"):
+        timeout_s = 180.0
+    elif cmd.startswith("gobuster") or cmd.startswith("ffuf"):
+        timeout_s = 120.0
+    elif cmd.startswith("whatweb"):
+        timeout_s = 60.0
+
     try:
         proc = await asyncio.create_subprocess_shell(
             cmd,
@@ -163,13 +174,17 @@ async def run_shell(cmd: str) -> tuple:
             executable="/bin/bash",
             cwd=CURRENT_CWD,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30.0)
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
         out = (stdout.decode() + stderr.decode()).strip()
         return proc.returncode or 0, out or "(no output)"
     except asyncio.TimeoutError:
         try: proc.kill()
         except: pass
-        return 124, f"Command '{cmd}' timed out after 30 seconds"
+        return 124, f"Command '{cmd}' timed out after {timeout_s} seconds"
+    except asyncio.CancelledError:
+        try: proc.kill()
+        except: pass
+        raise
     except Exception as e:
         return 1, f"Shell error: {e}"
 
@@ -273,7 +288,7 @@ async def chat_endpoint(req: ChatRequest, request: Request):
                 await asyncio.sleep(0)
 
                 try:
-                    resp = await asyncio.wait_for(
+                    llm_task = asyncio.create_task(
                         openai_client.chat.completions.create(
                             model=os.environ["CAI_MODEL"],
                             messages=[
@@ -282,9 +297,25 @@ async def chat_endpoint(req: ChatRequest, request: Request):
                             ],
                             temperature=0.3,
                             max_tokens=500,
-                        ),
-                        timeout=45.0,
+                        )
                     )
+                    
+                    start_time = asyncio.get_event_loop().time()
+                    while not llm_task.done():
+                        yield ": ping\n\n"
+                        await asyncio.sleep(2.0)
+                        if await request.is_disconnected():
+                            llm_task.cancel()
+                            print(f"[STOP] User disconnected during LLM generation at turn {turn+1}")
+                            break
+                        if asyncio.get_event_loop().time() - start_time > 45.0:
+                            llm_task.cancel()
+                            raise asyncio.TimeoutError()
+                            
+                    if llm_task.cancelled():
+                        break
+                    
+                    resp = llm_task.result()
                     raw_out = resp.choices[0].message.content or ""
                     print(f"[TURN {turn+1}] Raw LLM output ({len(raw_out)} chars)")
 
@@ -341,22 +372,26 @@ async def chat_endpoint(req: ChatRequest, request: Request):
                     # ── Execute command ──
                     try:
                         # Macro-Micro Integration Override
-                        # Intercept the 'run_infurnex' tool request from the LLM before it hits the bash executor
-                        if cmd.startswith("run_infurnex "):
-                            target_url = cmd.split("run_infurnex ")[1].strip()
-                            from tools.run_infurnex import run_infurnex # Lazy load tool
-                            
-                            # Execute deterministic orchestrator and extract output
-                            out = run_infurnex(target_url)  
-                            
-                            # Check logical parsing for flag discovery (early exit signal)
-                            if "CRITICAL SUCCESS" in out:
-                                rc = 0 # successful evaluation
-                            else:
-                                rc = 0 # default baseline return
+                        # Intercept disallowed internal calls to prevent recursive loops
+                        disallowed_prefixes = ("run_infurnex", "controller", "engine", "loop", "python3 infurnex")
+                        if any(cmd.startswith(prefix) for prefix in disallowed_prefixes):
+                            rc = 1
+                            out = "ERROR: You are restricted to valid Linux tools (curl, grep, jq, etc). Calling internal engine functions like run_infurnex is strictly PROHIBITED."
                         else:
                             # Standard pathway for all other linux commands (nmap, curl, etc)
-                            rc, out = await run_shell(cmd)
+                            shell_task = asyncio.create_task(run_shell(cmd))
+                            while not shell_task.done():
+                                yield ": ping\n\n"
+                                await asyncio.sleep(2.0)
+                                if await request.is_disconnected():
+                                    shell_task.cancel()
+                                    break
+                            
+                            if shell_task.cancelled():
+                                break
+                            rc, out = shell_task.result()
+                    except asyncio.CancelledError:
+                        break
                     except Exception as e:
                         rc, out = 1, f"Shell error: {e}"
 
